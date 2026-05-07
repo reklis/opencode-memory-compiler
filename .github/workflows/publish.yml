@@ -25,8 +25,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
+          node-version: 22
+
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
@@ -46,10 +48,8 @@ jobs:
         run: |
           npm version patch -m "chore(release): v%s [skip publish]"
 
-      - name: Push release commit and tag
-        run: git push origin HEAD:main --follow-tags
-
       - name: Publish to npm
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Push release commit and tag
+        run: git push origin HEAD:main --follow-tags
