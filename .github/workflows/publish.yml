@@ -12,9 +12,7 @@ permissions:
 
 jobs:
   publish:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      !contains(github.event.head_commit.message, '[skip publish]')
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[skip publish]') == false }}
     runs-on: ubuntu-latest
 
     steps:
@@ -45,7 +43,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version and tag release
-        run: npm version patch -m "chore(release): v%s [skip publish]"
+        run: |
+          npm version patch -m "chore(release): v%s [skip publish]"
 
       - name: Push release commit and tag
         run: git push origin HEAD:main --follow-tags
