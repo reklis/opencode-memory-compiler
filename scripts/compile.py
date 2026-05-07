@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import sys
 from pathlib import Path
 
@@ -27,24 +26,15 @@ from utils import (
     read_wiki_index,
     save_state,
 )
+from opencode_llm import run_opencode
 
 # ── Paths for the LLM to use ──────────────────────────────────────────
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
-async def compile_daily_log(log_path: Path, state: dict) -> float:
+def compile_daily_log(log_path: Path, state: dict) -> bool:
     """Compile a single daily log into knowledge articles.
-
-    Returns the API cost of the compilation.
     """
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
-
     log_content = log_path.read_text(encoding="utf-8")
     schema = AGENTS_FILE.read_text(encoding="utf-8")
     wiki_index = read_wiki_index()
@@ -126,41 +116,21 @@ Read the daily log above and compile it into wiki articles following the schema 
 - Sources section should cite the daily log with specific claims extracted
 """
 
-    cost = 0.0
-
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                system_prompt={"type": "preset", "preset": "claude_code"},
-                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep"],
-                permission_mode="acceptEdits",
-                max_turns=30,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        pass  # compilation output - LLM writes files directly
-            elif isinstance(message, ResultMessage):
-                cost = message.total_cost_usd or 0.0
-                print(f"  Cost: ${cost:.4f}")
+        run_opencode(prompt, agent="build", title=f"compile {log_path.name}", timeout=1_800)
     except Exception as e:
         print(f"  Error: {e}")
-        return 0.0
+        return False
 
     # Update state
     rel_path = log_path.name
     state.setdefault("ingested", {})[rel_path] = {
         "hash": file_hash(log_path),
         "compiled_at": now_iso(),
-        "cost_usd": cost,
     }
-    state["total_cost"] = state.get("total_cost", 0.0) + cost
     save_state(state)
 
-    return cost
+    return True
 
 
 def main():
@@ -208,15 +178,15 @@ def main():
         return
 
     # Compile each file sequentially
-    total_cost = 0.0
+    success_count = 0
     for i, log_path in enumerate(to_compile, 1):
         print(f"\n[{i}/{len(to_compile)}] Compiling {log_path.name}...")
-        cost = asyncio.run(compile_daily_log(log_path, state))
-        total_cost += cost
-        print(f"  Done.")
+        if compile_daily_log(log_path, state):
+            success_count += 1
+            print("  Done.")
 
     articles = list_wiki_articles()
-    print(f"\nCompilation complete. Total cost: ${total_cost:.2f}")
+    print(f"\nCompilation complete. Compiled: {success_count}/{len(to_compile)}")
     print(f"Knowledge base: {len(articles)} articles")
 
 

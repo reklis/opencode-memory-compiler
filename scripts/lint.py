@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import asyncio
 from pathlib import Path
 
 from config import KNOWLEDGE_DIR, REPORTS_DIR, now_iso, today_iso
@@ -28,6 +27,7 @@ from utils import (
     save_state,
     wiki_article_exists,
 )
+from opencode_llm import run_opencode
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -145,16 +145,8 @@ def check_sparse_articles() -> list[dict]:
     return issues
 
 
-async def check_contradictions() -> list[dict]:
+def check_contradictions() -> list[dict]:
     """Use LLM to detect contradictions across articles."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
-
     wiki_content = read_all_wiki_content()
 
     prompt = f"""Review this knowledge base for contradictions, inconsistencies, or
@@ -179,20 +171,8 @@ If no issues found, output exactly: NO_ISSUES
 
 Do NOT output anything else - no preamble, no explanation, just the formatted lines."""
 
-    response = ""
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                allowed_tools=[],
-                max_turns=2,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response += block.text
+        response = run_opencode(prompt, agent="plan", title="knowledge lint", timeout=600)
     except Exception as e:
         return [{"severity": "error", "check": "contradiction", "file": "(system)", "detail": f"LLM check failed: {e}"}]
 
@@ -252,14 +232,14 @@ def main():
     parser.add_argument(
         "--structural-only",
         action="store_true",
-        help="Skip LLM-based checks (contradictions) - faster and free",
+        help="Skip LLM-based checks (contradictions) - faster, no model call",
     )
     args = parser.parse_args()
 
     print("Running knowledge base lint checks...")
     all_issues: list[dict] = []
 
-    # Structural checks (free, instant)
+    # Structural checks (local, instant)
     checks = [
         ("Broken links", check_broken_links),
         ("Orphan pages", check_orphan_pages),
@@ -275,10 +255,10 @@ def main():
         all_issues.extend(issues)
         print(f"    Found {len(issues)} issue(s)")
 
-    # LLM check (costs money)
+    # LLM check
     if not args.structural_only:
         print("  Checking: Contradictions (LLM)...")
-        issues = asyncio.run(check_contradictions())
+        issues = check_contradictions()
         all_issues.extend(issues)
         print(f"    Found {len(issues)} issue(s)")
     else:

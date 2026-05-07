@@ -1,52 +1,71 @@
-# LLM Personal Knowledge Base
+# OpenCode Memory Compiler
 
-**Your AI conversations compile themselves into a searchable knowledge base.**
+**Your OpenCode conversations compile themselves into a searchable markdown knowledge base.**
 
-Adapted from [Karpathy's LLM Knowledge Base](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) architecture, but instead of clipping web articles, the raw data is your own conversations with Claude Code. When a session ends (or auto-compacts mid-session), Claude Code hooks capture the conversation transcript and spawn a background process that uses the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) to extract the important stuff - decisions, lessons learned, patterns, gotchas - and appends it to a daily log. You then compile those daily logs into structured, cross-referenced knowledge articles organized by concept. Retrieval uses a simple index file instead of RAG - no vector database, no embeddings, just markdown.
-
-Anthropic has clarified that personal use of the Claude Agent SDK is covered under your existing Claude subscription (Max, Team, or Enterprise) - no separate API credits needed. Unlike OpenClaw, which requires API billing for its memory flush, this runs on your subscription.
+This project adapts Karpathy's LLM knowledge-base idea to personal AI coding sessions. OpenCode automatically captures useful conversation context, appends it to daily logs, and compiles those logs into structured, cross-linked knowledge articles. Retrieval is index-guided markdown, not RAG: the model reads `knowledge/index.md`, selects relevant articles, and answers from the knowledge base.
 
 ## Quick Start
 
-Tell your AI coding agent:
+1. Install dependencies:
 
-> "Clone https://github.com/coleam00/claude-memory-compiler into this project. Set up the Claude Code hooks so my conversations automatically get captured into daily logs, compiled into a knowledge base, and injected back into future sessions. Read the AGENTS.md for the full technical reference on how everything works."
+```bash
+uv sync
+```
 
-The agent will:
-1. Clone the repo and run `uv sync` to install dependencies
-2. Copy `.claude/settings.json` into your project (or merge the hooks into your existing settings)
-3. The hooks activate automatically next time you open Claude Code
+2. Make sure OpenCode is authenticated with the provider/model you want:
 
-From there, your conversations start accumulating. After 6 PM local time, the next session flush automatically triggers compilation of that day's logs into knowledge articles. You can also run `uv run python scripts/compile.py` manually at any time.
+```bash
+opencode auth login
+```
+
+3. Start OpenCode in this project. The plugin in `.opencode/plugins/memory-compiler.js` loads automatically.
+
+```bash
+opencode
+```
+
+OpenCode captures sessions automatically when they become idle and before compaction. After 6 PM local time, a flush can trigger compilation of changed daily logs. You can also run compilation manually at any time.
+
+## Model Selection
+
+The memory compiler does not hardcode a model and does not pass `--model` to OpenCode. It uses OpenCode's normal resolution order: CLI/config model, last-used model, then OpenCode's default.
+
+All unattended memory tasks run with `--dangerously-skip-permissions` so background compilation can complete without prompts.
 
 ## How It Works
 
-```
-Conversation -> SessionEnd/PreCompact hooks -> flush.py extracts knowledge
-    -> daily/YYYY-MM-DD.md -> compile.py -> knowledge/concepts/, connections/, qa/
-        -> SessionStart hook injects index into next session -> cycle repeats
+```text
+OpenCode session -> .opencode plugin captures idle/compaction context
+    -> scripts/flush.py -> daily/YYYY-MM-DD.md
+    -> scripts/compile.py -> knowledge/concepts/, connections/, qa/
+    -> plugin injects knowledge/index.md into future sessions
 ```
 
-- **Hooks** capture conversations automatically (session end + pre-compaction safety net)
-- **flush.py** calls the Claude Agent SDK to decide what's worth saving, and after 6 PM triggers end-of-day compilation automatically
-- **compile.py** turns daily logs into organized concept articles with cross-references (triggered automatically or run manually)
-- **query.py** answers questions using index-guided retrieval (no RAG needed at personal scale)
-- **lint.py** runs 7 health checks (broken links, orphans, contradictions, staleness)
+- `.opencode/plugins/memory-compiler.js` injects memory context, captures idle sessions, and catches pre-compaction context.
+- `scripts/flush.py` asks OpenCode what is worth saving and appends the result to `daily/`.
+- `scripts/compile.py` turns daily logs into organized concept and connection articles.
+- `scripts/query.py` answers questions using index-guided retrieval.
+- `scripts/lint.py` runs structural checks and an optional LLM contradiction check.
 
 ## Key Commands
 
 ```bash
-uv run python scripts/compile.py                    # compile new daily logs
-uv run python scripts/query.py "question"            # ask the knowledge base
-uv run python scripts/query.py "question" --file-back # ask + save answer back
-uv run python scripts/lint.py                        # run health checks
-uv run python scripts/lint.py --structural-only      # free structural checks only
+uv run python scripts/compile.py                     # compile new daily logs
+uv run python scripts/compile.py --dry-run           # show pending logs
+uv run python scripts/query.py "question"             # ask the knowledge base
+uv run python scripts/query.py "question" --file-back # ask and save answer
+uv run python scripts/lint.py                         # run all health checks
+uv run python scripts/lint.py --structural-only       # skip LLM contradiction check
 ```
+
+## Cost Tracking
+
+This project intentionally does not track costs. Use `opencode stats` if you want usage or cost visibility.
 
 ## Why No RAG?
 
-Karpathy's insight: at personal scale (50-500 articles), the LLM reading a structured `index.md` outperforms vector similarity. The LLM understands what you're really asking; cosine similarity just finds similar words. RAG becomes necessary at ~2,000+ articles when the index exceeds the context window.
+At personal knowledge-base scale, a structured `knowledge/index.md` is usually better than vector search. The model can reason over article summaries, select relevant pages, and synthesize an answer with wikilink citations. RAG becomes useful later if the index grows beyond the context window.
 
 ## Technical Reference
 
-See **[AGENTS.md](AGENTS.md)** for the complete technical reference: article formats, hook architecture, script internals, cross-platform details, costs, and customization options. AGENTS.md is designed to give an AI agent everything it needs to understand, modify, or rebuild the system.
+See [AGENTS.md](AGENTS.md) for the full schema, article formats, OpenCode integration details, and script behavior.

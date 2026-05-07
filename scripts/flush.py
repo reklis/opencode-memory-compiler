@@ -1,9 +1,9 @@
 """
 Memory flush agent - extracts important knowledge from conversation context.
 
-Spawned by session-end.py or pre-compact.py as a background process. Reads
-pre-extracted conversation context from a .md file, uses the Claude Agent SDK
-to decide what's worth saving, and appends the result to today's daily log.
+Spawned by the OpenCode memory plugin as a background process. Reads
+pre-extracted conversation context from a .md file, uses OpenCode to decide
+what's worth saving, and appends the result to today's daily log.
 
 Usage:
     uv run python flush.py <context_file.md> <session_id>
@@ -11,11 +11,10 @@ Usage:
 
 from __future__ import annotations
 
-# Recursion prevention: set this BEFORE any imports that might trigger Claude
 import os
-os.environ["CLAUDE_INVOKED_BY"] = "memory_flush"
+os.environ["OPENCODE_MEMORY_COMPILER"] = "1"
 
-import asyncio
+from hashlib import sha256
 import json
 import logging
 import sys
@@ -28,6 +27,9 @@ DAILY_DIR = ROOT / "daily"
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_FILE = SCRIPTS_DIR / "last-flush.json"
 LOG_FILE = SCRIPTS_DIR / "flush.log"
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+from opencode_llm import run_opencode  # noqa: E402
 
 # Set up file-based logging so we can verify the background process ran.
 # The parent process sends stdout/stderr to DEVNULL (to avoid the inherited
@@ -72,19 +74,11 @@ def append_to_daily_log(content: str, section: str = "Session") -> None:
         f.write(entry)
 
 
-async def run_flush(context: str) -> str:
-    """Use Claude Agent SDK to extract important knowledge from conversation context."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
-
+def run_flush(context: str) -> str:
+    """Use OpenCode to extract important knowledge from conversation context."""
     prompt = f"""Review the conversation context below and respond with a concise summary
 of important items that should be preserved in the daily log.
-Do NOT use any tools — just return plain text.
+Do NOT use any tools - just return plain text.
 
 Format your response as a structured daily log entry with these sections:
 
@@ -114,29 +108,12 @@ respond with exactly: FLUSH_OK
 
 {context}"""
 
-    response = ""
-
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT),
-                allowed_tools=[],
-                max_turns=2,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response += block.text
-            elif isinstance(message, ResultMessage):
-                pass
+        return run_opencode(prompt, agent="plan", title="memory flush", timeout=600)
     except Exception as e:
         import traceback
-        logging.error("Agent SDK error: %s\n%s", e, traceback.format_exc())
-        response = f"FLUSH_ERROR: {type(e).__name__}: {e}"
-
-    return response
+        logging.error("OpenCode flush error: %s\n%s", e, traceback.format_exc())
+        return f"FLUSH_ERROR: {type(e).__name__}: {e}"
 
 
 COMPILE_AFTER_HOUR = 18  # 6 PM local time
@@ -203,16 +180,6 @@ def main():
         logging.error("Context file not found: %s", context_file)
         return
 
-    # Deduplication: skip if same session was flushed within 60 seconds
-    state = load_flush_state()
-    if (
-        state.get("session_id") == session_id
-        and time.time() - state.get("timestamp", 0) < 60
-    ):
-        logging.info("Skipping duplicate flush for session %s", session_id)
-        context_file.unlink(missing_ok=True)
-        return
-
     # Read pre-extracted context
     context = context_file.read_text(encoding="utf-8").strip()
     if not context:
@@ -220,10 +187,21 @@ def main():
         context_file.unlink(missing_ok=True)
         return
 
+    # Deduplicate by exact context, not by time. Idle events can fire repeatedly
+    # for the same completed turn.
+    state = load_flush_state()
+    sessions = state.setdefault("sessions", {})
+    context_digest = sha256(context.encode("utf-8")).hexdigest()[:16]
+    previous = sessions.get(session_id, {})
+    if previous.get("context_hash") == context_digest:
+        logging.info("Skipping duplicate flush for session %s", session_id)
+        context_file.unlink(missing_ok=True)
+        return
+
     logging.info("Flushing session %s: %d chars", session_id, len(context))
 
     # Run the LLM extraction
-    response = asyncio.run(run_flush(context))
+    response = run_flush(context)
 
     # Append to daily log
     if "FLUSH_OK" in response:
@@ -239,7 +217,8 @@ def main():
         append_to_daily_log(response, "Session")
 
     # Update dedup state
-    save_flush_state({"session_id": session_id, "timestamp": time.time()})
+    sessions[session_id] = {"context_hash": context_digest, "timestamp": time.time()}
+    save_flush_state(state)
 
     # Clean up context file
     context_file.unlink(missing_ok=True)

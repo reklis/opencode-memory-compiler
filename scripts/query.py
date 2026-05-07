@@ -13,30 +13,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import asyncio
 from pathlib import Path
 
 from config import KNOWLEDGE_DIR, QA_DIR, now_iso
 from utils import load_state, read_all_wiki_content, save_state
+from opencode_llm import run_opencode
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
-async def run_query(question: str, file_back: bool = False) -> str:
+def run_query(question: str, file_back: bool = False) -> str:
     """Query the knowledge base and optionally file the answer back."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
-
     wiki_content = read_all_wiki_content()
-
-    tools = ["Read", "Glob", "Grep"]
-    if file_back:
-        tools.extend(["Write", "Edit"])
 
     file_back_instructions = ""
     if file_back:
@@ -79,33 +67,19 @@ consulting the knowledge base below.
 {question}
 {file_back_instructions}"""
 
-    answer = ""
-    cost = 0.0
-
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                system_prompt={"type": "preset", "preset": "claude_code"},
-                allowed_tools=tools,
-                permission_mode="acceptEdits",
-                max_turns=15,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        answer += block.text
-            elif isinstance(message, ResultMessage):
-                cost = message.total_cost_usd or 0.0
+        answer = run_opencode(
+            prompt,
+            agent="build" if file_back else "plan",
+            title="knowledge query",
+            timeout=900,
+        )
     except Exception as e:
         answer = f"Error querying knowledge base: {e}"
 
     # Update state
     state = load_state()
     state["query_count"] = state.get("query_count", 0) + 1
-    state["total_cost"] = state.get("total_cost", 0.0) + cost
     save_state(state)
 
     return answer
@@ -125,7 +99,7 @@ def main():
     print(f"File back: {'yes' if args.file_back else 'no'}")
     print("-" * 60)
 
-    answer = asyncio.run(run_query(args.question, file_back=args.file_back))
+    answer = run_query(args.question, file_back=args.file_back)
     print(answer)
 
     if args.file_back:
