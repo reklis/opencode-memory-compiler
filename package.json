@@ -1,0 +1,51 @@
+{
+  "name": "opencode-memory-compiler",
+  "version": "0.1.0",
+  "description": "OpenCode plugin and CLI that compiles AI conversations into a markdown knowledge base",
+  "type": "module",
+  "main": "./dist/plugin.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reklis/opencode-memory-compiler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/reklis/opencode-memory-compiler/issues"
+  },
+  "homepage": "https://github.com/reklis/opencode-memory-compiler#readme",
+  "bin": {
+    "opencode-memory": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./dist/plugin.js",
+    "./cli": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "memory",
+    "knowledge-base"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
