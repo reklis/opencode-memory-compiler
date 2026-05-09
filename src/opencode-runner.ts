@@ -1,7 +1,4 @@
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
 
 export type RunOpenCodeOptions = {
   projectRoot: string
@@ -19,11 +16,6 @@ export class OpenCodeRunError extends Error {
 }
 
 export async function runOpenCode(options: RunOpenCodeOptions): Promise<string> {
-  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "opencode-memory-"))
-  const promptFile = path.join(tmpRoot, "prompt.md")
-  await mkdir(tmpRoot, { recursive: true })
-  await writeFile(promptFile, options.prompt, "utf8")
-
   const args = [
     "run",
     "--pure",
@@ -34,25 +26,19 @@ export async function runOpenCode(options: RunOpenCodeOptions): Promise<string> 
     "--title",
     options.title || "memory compiler",
     "--dangerously-skip-permissions",
-    "--file",
-    promptFile,
-    "Follow the instructions in the attached prompt file exactly.",
+    options.prompt,
   ]
 
-  try {
-    const { stdout, stderr, code } = await spawnCollect("opencode", args, {
-      cwd: options.projectRoot,
-      env: { ...process.env, OPENCODE_MEMORY_COMPILER: "1" },
-      timeoutMs: options.timeoutMs || 1_800_000,
-    })
-    if (code !== 0) {
-      const details = stderr.trim() || stdout.trim() || "unknown error"
-      throw new OpenCodeRunError(`opencode run failed (${code}): ${details}`)
-    }
-    return stdout.trim()
-  } finally {
-    await rm(tmpRoot, { recursive: true, force: true })
+  const { stdout, stderr, code } = await spawnCollect("opencode", args, {
+    cwd: options.projectRoot,
+    env: { ...process.env, OPENCODE_MEMORY_COMPILER: "1" },
+    timeoutMs: options.timeoutMs || 1_800_000,
+  })
+  if (code !== 0) {
+    const details = stderr.trim() || stdout.trim() || "unknown error"
+    throw new OpenCodeRunError(`opencode run failed (${code}): ${details}`)
   }
+  return stdout.trim()
 }
 
 function spawnCollect(

@@ -10,6 +10,7 @@ const MAX_CONTEXT_CHARS = 15_000
 const MAX_MEMORY_CONTEXT_CHARS = 20_000
 const MAX_LOG_LINES = 30
 const recentFingerprints = new Map<string, string>()
+const bufferedTurns = new Map<string, string[]>()
 
 type PluginClient = {
   session: {
@@ -20,6 +21,8 @@ type PluginClient = {
     log(input: { body: { service: string; level: string; message: string; extra?: Record<string, unknown> } }): Promise<unknown>
   }
 }
+
+type SessionMessage = { info?: { role?: string }; role?: string; parts?: unknown[] }
 
 type PluginInput = {
   client: PluginClient
@@ -38,6 +41,14 @@ function digest(value: string): string {
 
 function safeSessionID(sessionID: string): string {
   return sessionID.replace(/[^a-zA-Z0-9_.-]/g, "-")
+}
+
+function rememberTurn(sessionID: string, role: "User" | "Assistant", text: string): string {
+  const turns = bufferedTurns.get(sessionID) ?? []
+  turns.push(`**${role}:** ${text.trim()}\n`)
+  const recent = turns.slice(-MAX_TURNS)
+  bufferedTurns.set(sessionID, recent)
+  return recent.join("\n")
 }
 
 async function recentDailyLog(paths: MemoryPaths): Promise<string> {
@@ -76,10 +87,21 @@ function partText(part: unknown): string {
 }
 
 async function conversationContext(client: PluginClient, sessionID: string): Promise<{ context: string; turnCount: number }> {
-  const result = await client.session.messages({ path: { id: sessionID }, query: { limit: MAX_TURNS * 2 } })
+  const limit = MAX_TURNS * 2
+  const result = await client.session.messages({ path: { id: sessionID }, query: { limit } })
+  let messages = Array.isArray(result) ? (result as SessionMessage[]) : ((result.data ?? []) as SessionMessage[])
+  if (messages.length === 0) {
+    const flatResult = await (client.session.messages as unknown as (input: { sessionID: string; limit: number }) => Promise<unknown>)({
+      sessionID,
+      limit,
+    }).catch(() => undefined)
+    messages = Array.isArray(flatResult)
+      ? (flatResult as SessionMessage[])
+      : (((flatResult as { data?: unknown })?.data ?? []) as SessionMessage[])
+  }
   const turns: string[] = []
-  for (const message of result.data ?? []) {
-    const role = message.info?.role
+  for (const message of messages) {
+    const role = message.info?.role ?? message.role
     if (role !== "user" && role !== "assistant") continue
     const text = (message.parts ?? []).map(partText).filter(Boolean).join("\n").trim()
     if (!text) continue
@@ -127,9 +149,28 @@ async function captureSession(
   options: PluginOptions,
 ): Promise<void> {
   const { context, turnCount } = await conversationContext(client, sessionID)
-  if (!context.trim() || turnCount < minTurns) return
+  await captureContext(client, paths, sessionID, reason, minTurns, options, context, turnCount)
+}
+
+async function captureContext(
+  client: PluginClient,
+  paths: MemoryPaths,
+  sessionID: string,
+  reason: string,
+  minTurns: number,
+  options: PluginOptions,
+  context: string,
+  turnCount: number,
+): Promise<void> {
+  if (!context.trim() || turnCount < minTurns) {
+    await log(client, paths, "debug", "skipping capture with insufficient context", { sessionID, reason, turnCount, minTurns })
+    return
+  }
   const fingerprint = digest(context)
-  if (recentFingerprints.get(sessionID) === fingerprint) return
+  if (recentFingerprints.get(sessionID) === fingerprint) {
+    await log(client, paths, "debug", "skipping duplicate capture", { sessionID, reason })
+    return
+  }
   recentFingerprints.set(sessionID, fingerprint)
 
   await ensureMemoryDirs(paths)
@@ -152,13 +193,14 @@ async function captureSession(
     "--compile-after-hour",
     String(options.autoCompileHour ?? 18),
   ]
-  const child = spawn(process.execPath, args, {
+  const child = spawn(process.env.OPENCODE_MEMORY_NODE || "node", args, {
     cwd: paths.projectRoot,
     detached: true,
     stdio: "ignore",
     env: { ...process.env, OPENCODE_MEMORY_COMPILER: "1" },
   })
   child.unref()
+  await log(client, paths, "debug", "spawned memory flush", { sessionID, reason, contextFile, turnCount })
 }
 
 export const MemoryCompilerPlugin = async ({ client, directory, worktree }: PluginInput, options: PluginOptions = {}) => {
@@ -187,6 +229,25 @@ export const MemoryCompilerPlugin = async ({ client, directory, worktree }: Plug
         } catch (error) {
           await log(client, paths, "error", "failed to capture idle session", { error: String(error) })
         }
+      }
+    },
+
+    "chat.message": async (input: { sessionID: string }, output: { parts: unknown[] }) => {
+      const text = (output.parts ?? []).map(partText).filter(Boolean).join("\n").trim()
+      if (text) rememberTurn(input.sessionID, "User", text)
+    },
+
+    "experimental.text.complete": async (
+      input: { sessionID: string },
+      output: { text: string },
+    ) => {
+      const text = output.text.trim()
+      if (!text) return
+      const context = rememberTurn(input.sessionID, "Assistant", text)
+      try {
+        await captureContext(client, paths, input.sessionID, "text-complete", 1, options, context, bufferedTurns.get(input.sessionID)?.length ?? 0)
+      } catch (error) {
+        await log(client, paths, "error", "failed to capture completed text", { error: String(error) })
       }
     },
 
