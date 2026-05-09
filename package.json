@@ -1,6 +1,6 @@
 {
   "name": "opencode-memory-compiler",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "OpenCode plugin and CLI that compiles AI conversations into a markdown knowledge base",
   "type": "module",
   "main": "./dist/plugin.js",
