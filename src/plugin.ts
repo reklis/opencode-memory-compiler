@@ -32,6 +32,7 @@ type PluginInput = {
 
 type PluginOptions = MemoryOptions & {
   enabled?: boolean
+  autoCompile?: boolean
   autoCompileHour?: number
 }
 
@@ -190,9 +191,12 @@ async function captureContext(
     contextFile,
     "--session-id",
     sessionID,
-    "--compile-after-hour",
-    String(options.autoCompileHour ?? 18),
   ]
+  if (options.autoCompile === false) {
+    args.push("--no-compile")
+  } else if (options.autoCompileHour !== undefined) {
+    args.push("--compile-after-hour", String(options.autoCompileHour))
+  }
   const child = spawn(process.env.OPENCODE_MEMORY_NODE || "node", args, {
     cwd: paths.projectRoot,
     detached: true,

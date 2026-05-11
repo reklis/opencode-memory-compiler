@@ -43,7 +43,10 @@ async function main(): Promise<number> {
       const contextFile = requiredFlag(parsed.flags, "context-file")
       const sessionID = requiredFlag(parsed.flags, "session-id")
       try {
-        await flushContext(paths, contextFile, sessionID, { compileAfterHour: numberFlag(parsed.flags["compile-after-hour"], 18) })
+        await flushContext(paths, contextFile, sessionID, {
+          compile: !Boolean(parsed.flags["no-compile"]),
+          compileAfterHour: optionalNumberFlag(parsed.flags["compile-after-hour"]),
+        })
       } finally {
         await rm(contextFile, { force: true }).catch(() => undefined)
       }
@@ -98,9 +101,9 @@ function stringFlag(value: string | boolean | undefined): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
-function numberFlag(value: string | boolean | undefined, fallback: number): number {
+function optionalNumberFlag(value: string | boolean | undefined): number | undefined {
   const parsed = typeof value === "string" ? Number(value) : NaN
-  return Number.isFinite(parsed) ? parsed : fallback
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function requiredFlag(flags: Record<string, string | boolean>, name: string): string {

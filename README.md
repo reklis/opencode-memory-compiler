@@ -42,6 +42,7 @@ OpenCode session -> global plugin captures idle/compaction context
 ```
 
 - Captures sessions on `session.idle` and before compaction.
+- Compiles changed daily logs automatically after each flush by default.
 - Stores memory outside repositories by default.
 - Runs unattended memory work with `opencode run --dangerously-skip-permissions`.
 - Never passes `--model`; OpenCode resolves the active/default/last-used model.

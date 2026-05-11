@@ -19,7 +19,7 @@ export async function flushContext(
   paths: MemoryPaths,
   contextFile: string,
   sessionID: string,
-  options: { compileAfterHour?: number } = {},
+  options: { compile?: boolean; compileAfterHour?: number } = {},
 ): Promise<void> {
   await ensureMemoryDirs(paths)
   await log(paths, `flush started for session ${sessionID}, context: ${contextFile}`)
@@ -48,7 +48,7 @@ export async function flushContext(
 
   state.sessions[sessionID] = { context_hash: contextHash, timestamp: Date.now() / 1000 }
   await saveFlushState(paths, state)
-  await maybeTriggerCompilation(paths, options.compileAfterHour ?? 18)
+  await maybeTriggerCompilation(paths, options)
   await log(paths, `flush complete for session ${sessionID}`)
 }
 
@@ -96,15 +96,19 @@ export async function appendDailyLog(paths: MemoryPaths, content: string, sectio
   await appendLog(logPath, `### ${section} (${parts.time})\n\n${content}\n\n`)
 }
 
-async function maybeTriggerCompilation(paths: MemoryPaths, compileAfterHour: number): Promise<void> {
+async function maybeTriggerCompilation(paths: MemoryPaths, options: { compile?: boolean; compileAfterHour?: number }): Promise<void> {
+  if (options.compile === false) return
   const now = new Date()
-  if (now.getHours() < compileAfterHour) return
+  if (options.compileAfterHour !== undefined && now.getHours() < options.compileAfterHour) return
   const today = localDateParts(now).date
   const logPath = path.join(paths.dailyDir, `${today}.md`)
   const state = await loadState(paths)
   const previous = state.ingested[`${today}.md`]
   if (previous && previous.hash === (await fileHash(logPath).catch(() => ""))) return
-  await log(paths, `end-of-day compilation triggered after ${compileAfterHour}:00`)
+  const reason = options.compileAfterHour === undefined
+    ? "automatic compilation triggered"
+    : `end-of-day compilation triggered after ${options.compileAfterHour}:00`
+  await log(paths, reason)
   await compile(paths)
 }
 
